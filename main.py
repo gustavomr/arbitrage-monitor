@@ -24,8 +24,10 @@ Variáveis de ambiente (.env):
   TARGET_SPREAD=0.5          # % mínimo para alertar (padrão 0.5)
   CAPITAL_AMOUNT=6000       # capital de entrada (padrão 6000)
   CEX_SPREAD_COST=0.1        # custo de spread da CEX em % (padrão 0.1)
-  TELEGRAM_TOKEN=xxx
-  TELEGRAM_CHAT_ID=xxx
+  TELEGRAM_BOT_TOKEN=xxx    # Telegram bot token
+  TELEGRAM_CHAT_ID=xxx      # Telegram chat ID
+  TELEGRAM_ENABLED=true     # Habilita notificações Telegram (padrão false)
+  TELEGRAM_PARSE_MODE=HTML  # Formato das mensagens (HTML/Markdown)
 """
 
 import os
@@ -56,7 +58,7 @@ except ImportError:
 # ─── Telegram (opcional) ───────────────────────────────────────────────────────
 try:
     from telegram_notifier import TelegramNotifier, TelegramConfigManager
-    _tg_config = TelegramConfigManager.load_from_file()
+    _tg_config = TelegramConfigManager.load_from_env()
     TELEGRAM_AVAILABLE = True
 except ImportError:
     TELEGRAM_AVAILABLE = False

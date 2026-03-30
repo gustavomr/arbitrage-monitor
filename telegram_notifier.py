@@ -8,10 +8,15 @@ import asyncio
 import aiohttp
 import json
 import logging
+import os
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
@@ -165,8 +170,33 @@ class TelegramConfigManager:
     """Manages Telegram configuration"""
     
     @staticmethod
+    def load_from_env() -> TelegramConfig:
+        """Load Telegram configuration from environment variables"""
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+        chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+        enabled = os.getenv("TELEGRAM_ENABLED", "false").lower() == "true"
+        parse_mode = os.getenv("TELEGRAM_PARSE_MODE", "HTML")
+        
+        if not bot_token or not chat_id:
+            logger.warning("Telegram configuration missing in environment variables")
+            return TelegramConfig(
+                bot_token="",
+                chat_id="",
+                enabled=False,
+                parse_mode="HTML"
+            )
+        
+        return TelegramConfig(
+            bot_token=bot_token,
+            chat_id=chat_id,
+            enabled=enabled,
+            parse_mode=parse_mode
+        )
+    
+    @staticmethod
     def load_from_file(config_file: str = "telegram_config.json") -> TelegramConfig:
-        """Load Telegram configuration from file"""
+        """Load Telegram configuration from file (deprecated - use load_from_env)"""
+        logger.warning("load_from_file is deprecated. Use load_from_env instead.")
         try:
             with open(config_file, 'r') as f:
                 config_data = json.load(f)
@@ -178,16 +208,15 @@ class TelegramConfigManager:
                 parse_mode=config_data.get('parse_mode', 'HTML')
             )
         except FileNotFoundError:
-            logger.warning(f"Telegram config file {config_file} not found, creating default")
-            TelegramConfigManager.create_default_config(config_file)
-            return TelegramConfigManager.load_from_file(config_file)
+            logger.warning(f"Telegram config file {config_file} not found")
+            return TelegramConfigManager.load_from_env()
         except Exception as e:
             logger.error(f"Error loading Telegram config: {e}")
-            raise
+            return TelegramConfigManager.load_from_env()
     
     @staticmethod
     def create_default_config(config_file: str = "telegram_config.json"):
-        """Create default Telegram configuration file"""
+        """Create default Telegram configuration file (deprecated)"""
         default_config = {
             "bot_token": "YOUR_BOT_TOKEN_HERE",
             "chat_id": "YOUR_CHAT_ID_HERE",
@@ -200,12 +229,13 @@ class TelegramConfigManager:
         
         logger.info(f"Created default Telegram config: {config_file}")
         logger.info("Please edit the file with your bot token and chat ID, then set enabled to true")
+        logger.info("Consider migrating to environment variables for better security")
 
 # Example usage
 async def example_usage():
     """Example of how to use the Telegram notifier"""
     try:
-        config = TelegramConfigManager.load_from_file()
+        config = TelegramConfigManager.load_from_env()
         
         async with TelegramNotifier(config) as notifier:
             # Test connection
