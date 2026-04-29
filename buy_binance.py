@@ -95,6 +95,222 @@ def _post(path: str, params: dict) -> dict:
     return data
 
 
+def validate_api_permissions() -> dict:
+    """
+    Valida a API key e verifica quais operações são permitidas.
+    
+    Returns:
+        dict: {'valid': bool, 'permissions': list, 'account_info': dict, 'errors': list}
+    """
+    log.info("🔍 Validando API key e permissões...")
+    
+    result = {
+        'valid': False,
+        'permissions': [],
+        'account_info': {},
+        'errors': []
+    }
+    
+    try:
+        # 1. Testar conectividade básica (sem API key)
+        log.info("   Testando conectividade com Binance...")
+        _get("/api/v3/time")  # Não precisa de API key
+        log.info("   ✅ Conectividade OK")
+        
+        # 2. Testar API key com endpoint público (não requer assinatura)
+        log.info("   Testando API key...")
+        try:
+            # Testar com header da API key em endpoint público
+            r = requests.get(BASE_URL + "/api/v3/exchangeInfo", headers=_headers())
+            if r.status_code == 200:
+                log.info("   ✅ API key formatada corretamente")
+            else:
+                result['errors'].append('❌ API key mal formatada')
+                return result
+        except Exception as e:
+            result['errors'].append(f'❌ Erro ao testar API key: {str(e)}')
+            return result
+        
+        # 3. Testar endpoint básico de account info (requer permissão de leitura)
+        log.info("   Testando permissão de leitura...")
+        try:
+            account_data = _get("/api/v3/account", signed=True)
+            balances = [b for b in account_data.get('balances', []) if float(b['free']) > 0]
+            result['account_info']['active_balances'] = len(balances)
+            result['account_info']['account_type'] = 'SPOT'
+            log.info("   ✅ Permissão de leitura OK")
+            result['permissions'].append('READING')
+        except Exception as e:
+            error_msg = str(e)
+            if '401' in error_msg:
+                result['errors'].append('❌ API key inválida, expirada ou sem permissão de leitura')
+                result['errors'].append('❌ Verifique: API key, IP whitelist, ou ative "Enable Reading"')
+                return result
+            elif '1020' in error_msg:
+                result['errors'].append('❌ IP bloqueado - adicione seu IP à whitelist')
+                return result
+            else:
+                result['errors'].append(f'❌ Erro ao acessar conta: {error_msg}')
+                return result
+        
+        # 4. Testar endpoint de account status (requer permissões)
+        try:
+            log.info("   Testando status da conta...")
+            status_data = _get("/sapi/v1/account/status", signed=True)
+            result['account_info']['status'] = status_data.get('data', 'unknown')
+            
+            if status_data.get('data') == 'normal':
+                log.info("   ✅ Status da conta: Normal")
+            else:
+                result['errors'].append(f'❌ Status da conta: {status_data.get("data")}')
+                
+        except Exception as e:
+            if '401' in str(e):
+                result['errors'].append('❌ Sem permissão para verificar status da conta')
+            else:
+                result['errors'].append(f'❌ Erro ao verificar status: {str(e)}')
+        
+        # 5. Testar permissões de trading via endpoint de ordens
+        try:
+            log.info("   Testando permissão de trading...")
+            # Tentar obter ordens abertas (se não tiver, retorna array vazio)
+            orders = _get("/api/v3/openOrders", {"symbol": "USDTBRL"}, signed=True)
+            result['permissions'].append('SPOT_TRADING')
+            log.info("   ✅ Permissão de trading OK")
+        except Exception as e:
+            if '401' in str(e) or '403' in str(e):
+                result['errors'].append('❌ Sem permissão para trading - ative "Enable Spot & Margin Trading"')
+            else:
+                result['errors'].append(f'❌ Erro ao testar trading: {str(e)}')
+        
+        # 6. Testar endpoint de withdrawal permissions
+        try:
+            log.info("   Testando permissão de saques...")
+            withdraw_data = _get("/sapi/v1/capital/withdraw/history", {"coin": "USDT", "limit": 1}, signed=True)
+            result['permissions'].append('WITHDRAWALS')
+            log.info("   ✅ Permissão de saques OK")
+        except Exception as e:
+            if '401' in str(e) or '403' in str(e):
+                result['errors'].append('❌ Sem permissão para saques - ative "Enable Withdrawals"')
+            else:
+                result['errors'].append(f'❌ Erro ao testar saques: {str(e)}')
+        
+        # 7. Verificar se o endereço de destino está na whitelist
+        try:
+            log.info("   Verificando endereço na whitelist...")
+            withdraw_data = _get("/sapi/v1/capital/withdraw/address/list", {"coin": "USDT"}, signed=True)
+            addresses = [addr for addr in withdraw_data if addr.get('address') == RECIPIENT_ADDR]
+            
+            if addresses:
+                result['account_info']['address_whitelisted'] = True
+                log.info("   ✅ Endereço está na whitelist")
+            else:
+                result['account_info']['address_whitelisted'] = False
+                result['errors'].append('❌ Endereço de destino não está na whitelist')
+                log.warning("   ⚠️ Endereço não está na whitelist - adicione no site da Binance")
+                
+        except Exception as e:
+            if '401' in str(e) or '403' in str(e):
+                result['errors'].append('❌ Sem permissão para verificar whitelist')
+            else:
+                result['errors'].append(f'❌ Erro ao verificar whitelist: {str(e)}')
+        
+        # Se não houver erros críticos, API é válida
+        critical_errors = [e for e in result['errors'] if '❌' in e and 'Sem permissão' not in e and 'Status da conta anormal: Normal' not in e]
+        if not critical_errors:
+            result['valid'] = True
+            log.info("🎉 API key válida e funcionando!")
+        else:
+            log.error("❌ API key com problemas críticos")
+            
+    except Exception as e:
+        error_msg = str(e)
+        if '401' in error_msg or 'Invalid API-key' in error_msg:
+            result['errors'].append('❌ API key inválida ou expirada')
+            result['errors'].append('❌ Verifique: API key, IP whitelist, ou permissões')
+        elif '1020' in error_msg:
+            result['errors'].append('❌ IP bloqueado - adicione seu IP à whitelist')
+        elif '404' in error_msg:
+            result['errors'].append('❌ Endpoint não encontrado - verifique se API key tem permissões corretas')
+        else:
+            result['errors'].append(f'❌ Erro desconhecido: {error_msg}')
+        
+        log.error(f"❌ Falha na validação: {error_msg}")
+    
+    return result
+
+
+def print_api_validation_report(validation_result: dict):
+    """
+    Exibe um relatório detalhado da validação da API.
+    """
+    print("\n" + "="*70)
+    print("📊 RELATÓRIO DE VALIDAÇÃO DA API BINANCE")
+    print("="*70)
+    
+    if validation_result['valid']:
+        print("🟢 STATUS: API Key VÁLIDA e funcionando")
+    else:
+        print("🔴 STATUS: API Key INVÁLIDA ou com problemas")
+    
+    print(f"\n🔑 Permissões disponíveis: {', '.join(validation_result['permissions']) if validation_result['permissions'] else 'Nenhuma'}")
+    
+    account_info = validation_result['account_info']
+    if account_info:
+        print(f"\n📋 Informações da conta:")
+        print(f"   Tipo: {account_info.get('account_type', 'N/A')}")
+        print(f"   Status: {account_info.get('status', 'N/A')}")
+        print(f"   Endereço whitelist: {'✅' if account_info.get('address_whitelisted') else '❌'}")
+        print(f"   Saldos ativos: {account_info.get('active_balances', 0)}")
+    
+    if validation_result['errors']:
+        print(f"\n⚠️  Erros encontrados:")
+        for error in validation_result['errors']:
+            print(f"   {error}")
+    
+    print("\n" + "="*70)
+    
+    # Recomendações baseadas nos resultados
+    recommendations = []
+    permissions = validation_result['permissions']
+    
+    if not validation_result['valid']:
+        recommendations.append("Verifique se a API key está correta e não expirou")
+        recommendations.append("Adicione seu IP à whitelist nas configurações da API")
+    
+    if 'SPOT_TRADING' not in permissions:
+        recommendations.append("Ative 'Enable Spot & Margin Trading' nas configurações da API")
+    
+    if 'WITHDRAWALS' not in permissions:
+        recommendations.append("Ative 'Enable Withdrawals' nas configurações da API")
+    
+    if not account_info.get('address_whitelisted'):
+        recommendations.append("Adicione o endereço de destino à whitelist no site da Binance")
+    
+    # Verificar permissões necessárias para operação completa
+    required_permissions = ['READING', 'SPOT_TRADING', 'WITHDRAWALS']
+    missing_permissions = [p for p in required_permissions if p not in permissions]
+    
+    if missing_permissions:
+        recommendations.append(f"Permissões faltantes para operação completa: {', '.join(missing_permissions)}")
+    
+    if recommendations:
+        print("💡 RECOMENDAÇÕES:")
+        for rec in recommendations:
+            print(f"   • {rec}")
+        print("="*70)
+    
+    # Status final
+    if all(perm in permissions for perm in required_permissions) and account_info.get('address_whitelisted'):
+        print("🎉 API está pronta para operação completa!")
+    elif 'READING' in permissions and 'SPOT_TRADING' in permissions:
+        print("⚠️  API pode trading, mas não sacar (verifique permissões de withdrawal)")
+    elif 'READING' in permissions:
+        print("⚠️  API tem apenas permissão de leitura")
+    else:
+        print("❌ API não tem permissões básicas funcionando")
+
+
 # ─── Step 1: Live USDTBRL rate ────────────────────────────────────────────────
 
 def get_usdt_brl_rate() -> Decimal:
@@ -631,24 +847,51 @@ def main():
     log.info(" BRL → USDT (Binance Spot) → Polygon Wallet")
     log.info("=" * 60)
 
+    # Mostrar IP atual
+    try:
+        import requests
+        ip_response = requests.get("https://ifconfig.me", timeout=5)
+        current_ip = ip_response.text.strip()
+        log.info(f" 🌐 Seu IP atual: {current_ip}")
+        log.info("=" * 60)
+    except:
+        log.info(" 🌐 Não foi possível obter seu IP")
+        log.info("=" * 60)
+
     # Menu de opções
     while True:
         print("\nEscolha uma opção:")
-        print("1. Comprar USDT apenas")
-        print("2. Transferir USDT existente")
-        print("3. Comprar e Transferir (pipeline completo)")
-        print("4. Sair")
+        print("1. Validar API Key e permissões")
+        print("2. Comprar USDT apenas")
+        print("3. Transferir USDT existente")
+        print("4. Comprar e Transferir (pipeline completo)")
+        print("5. Sair")
         
-        choice = input("\nOpção (1-4): ").strip()
+        choice = input("\nOpção (1-5): ").strip()
         
         if choice == '1':
+            # Validar API key
+            validation_result = validate_api_permissions()
+            print_api_validation_report(validation_result)
+            
+            # Perguntar se quer continuar após validação
+            if validation_result['valid']:
+                continue_choice = input("\nDeseja continuar operando? (s/n): ").strip().lower()
+                if continue_choice != 's':
+                    log.info("\n👋 Saindo...")
+                    return
+            else:
+                input("\nPressione Enter para voltar ao menu...")
+            continue
+            
+        elif choice == '2':
             # Apenas compra
             net_usdt, target_price, real_spent = buy_usdt_operation()
             if net_usdt:
-                log.info("\n💡 Dica: Use opção 3 para comprar e transferir automaticamente")
+                log.info("\n💡 Dica: Use opção 4 para comprar e transferir automaticamente")
             break
             
-        elif choice == '2':
+        elif choice == '3':
             # Apenas transferência
             try:
                 amount = Decimal(input("Quantidade de USDT para transferir: "))
@@ -657,19 +900,19 @@ def main():
                 log.error("❌ Valor inválido.")
             break
             
-        elif choice == '3':
+        elif choice == '4':
             # Pipeline completo
             net_usdt, target_price, real_spent = buy_usdt_operation()
             if net_usdt:
                 transfer_usdt_operation(net_usdt)
             break
             
-        elif choice == '4':
+        elif choice == '5':
             log.info("\n👋 Saindo...")
             break
             
         else:
-            log.error("❌ Opção inválida. Escolha 1-4.")
+            log.error("❌ Opção inválida. Escolha 1-5.")
             continue
 
 
