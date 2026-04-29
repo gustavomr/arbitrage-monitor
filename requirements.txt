@@ -1,1 +1,2 @@
-rich
+rich==14.3.3
+aiohttp==3.13.5

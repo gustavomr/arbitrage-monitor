@@ -81,7 +81,7 @@ class TelegramNotifier:
             logger.error(f"Error sending Telegram message: {e}")
             return False
     
-    async def send_arbitrage_alert(self, opportunities: List[Dict[str, Any]], min_profit_threshold: float = 0.5) -> bool:
+    async def send_arbitrage_alert(self, opportunities: List[Dict[str, Any]], min_profit_threshold: float = 0.5, max_opportunities: int = 5) -> bool:
         """Send arbitrage opportunity alert"""
         if not opportunities:
             return True
@@ -93,10 +93,14 @@ class TelegramNotifier:
             return True
         
         now = datetime.now(ZoneInfo("America/Sao_Paulo"))
-        message = f"🚨 <b>ARBITRAGE OPPORTUNITY ALERT</b> 🚨\n"
+        
+        # Get token name from the first opportunity
+        token_symbol = good_opportunities[0].get('token', 'Unknown')
+        
+        message = f"🚨 <b>ARBITRAGE OPPORTUNITY ALERT - {token_symbol}</b> 🚨\n"
         message += f"📅 {now.strftime('%d/%m/%Y %H:%M:%S')}\n\n"
         
-        for i, opp in enumerate(good_opportunities[:5], 1):  # Top 5 opportunities
+        for i, opp in enumerate(good_opportunities[:max_opportunities], 1):  # Top N opportunities
             spread = opp.get('spread', 0)
             buy_exchange = opp.get('compra', 'Unknown')
             sell_exchange = opp.get('venda', 'Unknown')

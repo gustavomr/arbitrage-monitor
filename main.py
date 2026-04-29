@@ -60,7 +60,13 @@ try:
     from telegram_notifier import TelegramNotifier, TelegramConfigManager
     _tg_config = TelegramConfigManager.load_from_env()
     TELEGRAM_AVAILABLE = True
-except ImportError:
+    print(f"✅ Telegram importado com sucesso - enabled: {_tg_config.enabled}")
+except ImportError as e:
+    print(f"❌ Erro ao importar telegram_notifier: {e}")
+    TELEGRAM_AVAILABLE = False
+    _tg_config = None
+except Exception as e:
+    print(f"❌ Erro geral no Telegram: {e}")
     TELEGRAM_AVAILABLE = False
     _tg_config = None
 
@@ -75,6 +81,7 @@ POLL_INTERVAL      = int(os.getenv("POLL_INTERVAL"))
 TARGET_SPREAD      = float(os.getenv("TARGET_SPREAD"))
 CAPITAL_AMOUNT     = float(os.getenv("CAPITAL_AMOUNT"))   # capital genérico
 CEX_SPREAD_COST    = float(os.getenv("CEX_SPREAD_COST"))   # custo de spread da CEX em %
+TELEGRAM_MAX_OPPORTUNITIES = int(os.getenv("TELEGRAM_MAX_OPPORTUNITIES", "5"))  # máximo de oportunidades no Telegram
 TIMEOUT            = 10
 
 # Polygon network config
@@ -137,7 +144,7 @@ CEX_LINKS: Dict[str, str] = {
 DEX_LINKS = {symbol: generate_dex_links(symbol, token.address) for symbol, token in TOKENS.items()}
 
 logging.basicConfig(
-    level=logging.WARNING,
+    level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s"
 )
 log = logging.getLogger(__name__)
@@ -753,13 +760,41 @@ def print_rich(ts: str, cex: Dict[str, Dict[str, float]], dex_prices: Dict[str, 
 
 async def _send_telegram(spreads_by_token: Dict[str, List[Dict[str, Any]]]):
     if not TELEGRAM_AVAILABLE or not _tg_config:
+        log.warning("Telegram not available or not configured")
         return
     
+    # Obter configuração de max_opportunities da variável de ambiente
+    max_opportunities = TELEGRAM_MAX_OPPORTUNITIES
+    log.info(f"Enviando até {max_opportunities} oportunidades por alerta Telegram")
+    
     # Enviar alertas para todos os tokens que tiverem spreads acima do threshold
+    alerts_sent = 0
     for token_symbol, spreads in spreads_by_token.items():
-        if spreads and spreads[0]["spread"] >= TARGET_SPREAD:
-            async with TelegramNotifier(_tg_config) as notifier:
-                await notifier.send_arbitrage_alert(spreads, min_profit_threshold=TARGET_SPREAD)
+        if spreads:
+            best_spread = spreads[0]["spread"]
+            log.info(f"{token_symbol} best spread: {best_spread:.2f}% (threshold: {TARGET_SPREAD:.2f}%)")
+            
+            if best_spread >= TARGET_SPREAD:
+                log.info(f"Sending Telegram alert for {token_symbol}: {best_spread:.2f}% >= {TARGET_SPREAD:.2f}%")
+                try:
+                    async with TelegramNotifier(_tg_config) as notifier:
+                        result = await notifier.send_arbitrage_alert(spreads, min_profit_threshold=TARGET_SPREAD, max_opportunities=max_opportunities)
+                        if result:
+                            alerts_sent += 1
+                            log.info(f"Telegram alert sent successfully for {token_symbol}")
+                        else:
+                            log.warning(f"Failed to send Telegram alert for {token_symbol}")
+                except Exception as e:
+                    log.error(f"Error sending Telegram alert for {token_symbol}: {e}")
+            else:
+                log.info(f"No alert for {token_symbol}: {best_spread:.2f}% < {TARGET_SPREAD:.2f}%")
+        else:
+            log.info(f"No spreads available for {token_symbol}")
+    
+    if alerts_sent > 0:
+        log.info(f"Total Telegram alerts sent: {alerts_sent}")
+    else:
+        log.info("No Telegram alerts sent (no spreads above threshold)")
 
 def notify_telegram(spreads_by_token: Dict[str, List[Dict[str, Any]]]):
     try:
