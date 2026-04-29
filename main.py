@@ -69,11 +69,12 @@ load_dotenv()
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIG
 # ═══════════════════════════════════════════════════════════════════════════════
-ONEINCH_API_KEY    = os.getenv("ONEINCH_API_KEY", "O238qWUba44Izpmm3iXLd26qfLDL2fQP")
-POLL_INTERVAL      = int(os.getenv("POLL_INTERVAL", "45"))
-TARGET_SPREAD      = float(os.getenv("TARGET_SPREAD", "0.35"))
-CAPITAL_AMOUNT     = float(os.getenv("CAPITAL_AMOUNT", "6000"))   # capital genérico
-CEX_SPREAD_COST    = float(os.getenv("CEX_SPREAD_COST", "0.1"))   # custo de spread da CEX em %
+ONEINCH_API_KEY    = os.getenv("ONEINCH_API_KEY")
+ZEROX_API_KEY      = os.getenv("ZEROX_API_KEY")  # Get from https://dashboard.0x.org/apps
+POLL_INTERVAL      = int(os.getenv("POLL_INTERVAL"))
+TARGET_SPREAD      = float(os.getenv("TARGET_SPREAD"))
+CAPITAL_AMOUNT     = float(os.getenv("CAPITAL_AMOUNT"))   # capital genérico
+CEX_SPREAD_COST    = float(os.getenv("CEX_SPREAD_COST"))   # custo de spread da CEX em %
 TIMEOUT            = 10
 
 # Polygon network config
@@ -119,6 +120,7 @@ def generate_dex_links(token_symbol: str, token_address: str) -> Dict[str, str]:
         "OpenOcean": f"https://app.openocean.finance/CLASSIC#/POLYGON/{USDT_ADDR}/{token_address}",
         "Jumper":     f"https://transferto.xyz/swap?fromChain=POL&toChain=POL&fromToken={USDT_ADDR}&toToken={token_address}",
         "DeFiLlama": f"https://swap.defillama.com/?chain=polygon&from={USDT_ADDR}&to={token_address}",
+        "Matcha":    f"https://matcha.xyz/tokens/polygon/{token_address}?buyChain=137&buyAddress={token_address}&sellAmount=1000",
     }
 
 # Links CEX (mesmos para todos os tokens)
@@ -389,6 +391,72 @@ def query_uniswap(usdt_amount: float, usdt_raw: int, token: TokenConfig) -> Opti
         log.warning(f"Uniswap {token.symbol} error: {e}")
     return None
 
+def query_matcha(usdt_amount: float, usdt_raw: int, token: TokenConfig) -> Optional[Dict[str, Any]]:
+    """
+    Query Matcha (0x API) for USDT -> Token swap price on Polygon
+    Uses the 0x Swap API v2 allowance holder endpoint
+    """
+    if not ZEROX_API_KEY:
+        log.warning(f"Matcha {token.symbol} skipped: no ZEROX_API_KEY configured")
+        return None
+    
+    url = "https://api.0x.org/swap/allowance-holder/price"
+    params = {
+        "chainId": str(POLYGON_CHAIN),  # Polygon chain ID
+        "sellToken": USDT_ADDR,         # USDT address on Polygon
+        "buyToken": token.address,      # Target token address
+        "sellAmount": str(usdt_raw),    # Amount in USDT base units (wei)
+        "taker": "0x0000000000000000000000000000000000000001",  # Dummy taker address for quotes
+    }
+    headers = {
+        "0x-api-key": ZEROX_API_KEY,
+        "0x-version": "v2",
+        "accept": "application/json"
+    }
+    
+    try:
+        r = requests.get(url, params=params, headers=headers, timeout=TIMEOUT)
+        r.raise_for_status()
+        d = r.json()
+        
+        # Extract buy amount and calculate price
+        buy_amount_raw = int(d["buyAmount"])
+        token_out = buy_amount_raw / 10 ** token.decimals
+        price = token_out / usdt_amount
+        
+        # Extract route information for better transparency
+        route_sources = []
+        if "route" in d and "fills" in d["route"]:
+            sources_seen = set()
+            for fill in d["route"]["fills"]:
+                source = fill.get("source", "Unknown")
+                # Avoid duplicate sources in the route display
+                if source not in sources_seen:
+                    route_sources.append(source)
+                    sources_seen.add(source)
+        
+        route_description = " → ".join(route_sources) if route_sources else "0x Aggregated"
+        
+        return {
+            "price": price, 
+            "route": route_description,
+            "buy_amount": buy_amount_raw,
+            "gas_estimate": d.get("gas"),
+            "fees": d.get("fees", {})
+        }
+        
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 401:
+            log.warning(f"Matcha {token.symbol} error: Invalid API key")
+        elif e.response.status_code == 429:
+            log.warning(f"Matcha {token.symbol} error: Rate limited")
+        else:
+            log.warning(f"Matcha {token.symbol} HTTP error {e.response.status_code}: {e}")
+    except Exception as e:
+        log.warning(f"Matcha {token.symbol} error: {e}")
+    
+    return None
+
 def query_defillama(token: TokenConfig) -> Optional[Dict[str, Any]]:
     try:
         u = requests.get(
@@ -412,9 +480,10 @@ def fetch_all_dex(usdt_amount: float, usdt_raw: int, token: TokenConfig) -> Dict
         "1inch":      query_1inch(usdt_amount, usdt_raw, token),
         "KyberSwap":  query_kyberswap(usdt_amount, usdt_raw, token),
         "ParaSwap":   query_paraswap(usdt_amount, usdt_raw, token),
-        "OpenOcean":  query_openocean(usdt_amount, usdt_raw, token),
-        "LiFi":       query_lifi(usdt_amount, usdt_raw, token),
-        "DeFiLlama":  query_defillama(token),
+        "Matcha":     query_matcha(usdt_amount, usdt_raw, token),
+    #    "OpenOcean":  query_openocean(usdt_amount, usdt_raw, token),
+    #    "LiFi":       query_lifi(usdt_amount, usdt_raw, token),
+      #  "DeFiLlama":  query_defillama(token),
     }
 
 # ═══════════════════════════════════════════════════════════════════════════════
