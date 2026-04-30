@@ -413,7 +413,7 @@ def query_matcha(usdt_amount: float, usdt_raw: int, token: TokenConfig) -> Optio
         "sellToken": USDT_ADDR,         # USDT address on Polygon
         "buyToken": token.address,      # Target token address
         "sellAmount": str(usdt_raw),    # Amount in USDT base units (wei)
-        "taker": "0x0000000000000000000000000000000000000001",  # Dummy taker address for quotes
+        "taker": "0x1234567890123456789012345678901234567890",  # Dummy taker address for quotes
     }
     headers = {
         "0x-api-key": ZEROX_API_KEY,
