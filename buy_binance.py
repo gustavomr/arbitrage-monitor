@@ -467,7 +467,7 @@ def buy_usdt_at_price(brl_amount: Decimal, target_price: Decimal) -> Decimal:
         usdt_quantity_rounded = Decimal('0.1')
         brl_amount = usdt_quantity_rounded * target_price
     
-    usdt_quantity_str = f"{usdt_quantity_rounded:.1f}"
+    usdt_quantity_str = str(usdt_quantity_rounded.quantize(Decimal('0.1'), rounding=ROUND_DOWN))
     
     log.info(f"[2] LIMIT BUY : Desejado {brl_amount} BRL → {usdt_quantity_str} USDT @ {target_price} BRL/USDT (real: {notional_value:.2f} BRL)")
     
