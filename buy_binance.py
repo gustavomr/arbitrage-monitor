@@ -601,7 +601,8 @@ def withdraw_usdt_to_polygon(usdt_amount: Decimal) -> str:
 
     Returns the Binance withdrawal ID for status tracking.
     """
-    amount_str = f"{usdt_amount:.2f}"
+    # Truncar para 2 casas decimais em vez de arredondar para cima
+    amount_str = f"{usdt_amount.quantize(Decimal('0.01'), rounding=ROUND_DOWN)}"
     log.info(f"[3] Withdraw   : {amount_str} USDT → {RECIPIENT_ADDR} (Polygon/MATIC)...")
 
     data = _post("/sapi/v1/capital/withdraw/apply", {
@@ -739,6 +740,32 @@ def get_usdt_balance() -> Decimal:
         return Decimal('0')
 
 
+def get_brl_balance() -> Decimal:
+    """
+    Busca o saldo atual de BRL na conta Binance.
+    
+    Returns:
+        Decimal: Saldo disponível de BRL
+    """
+    try:
+        account_data = _get("/api/v3/account", signed=True)
+        balances = account_data.get('balances', [])
+        
+        # Encontrar saldo de BRL
+        brl_balance = Decimal('0')
+        for balance in balances:
+            if balance['asset'] == 'BRL':
+                # Converter string para Decimal mantendo precisão
+                brl_balance = Decimal(str(balance['free']))
+                log.info(f"💰 Saldo BRL disponível: {brl_balance}")
+                break
+        
+        return brl_balance
+    except Exception as e:
+        log.error(f"❌ Erro ao buscar saldo BRL: {str(e)}")
+        return Decimal('0')
+
+
 def get_user_brl_amount() -> Decimal:
     """
     Pergunta ao usuário quanto em BRL gostaria de comprar.
@@ -746,9 +773,19 @@ def get_user_brl_amount() -> Decimal:
     Returns:
         Decimal: Valor em BRL que o usuário deseja gastar
     """
+    # Consultar saldo disponível de BRL apenas se não for modo simulação
+    brl_balance = None
+    if not SIMULATION_MODE:
+        print("\n🔍 Consultando seu saldo disponível...")
+        brl_balance = get_brl_balance()
+    
     while True:
         try:
-            print(f"\n💰 Valor padrão configurado: R$ {BRL_AMOUNT}")
+            if not SIMULATION_MODE and brl_balance is not None:
+                print(f"\n💰 Saldo BRL disponível: R$ {brl_balance:,.2f}")
+            else:
+                print(f"\n🧪 MODO SIMULAÇÃO - Sem validação de saldo")
+            print(f"💰 Valor padrão configurado: R$ {BRL_AMOUNT}")
             amount_input = input("Quanto em BRL você gostaria de comprar? (ou 'Enter' para usar o padrão): ").strip()
             
             if not amount_input:
@@ -758,6 +795,11 @@ def get_user_brl_amount() -> Decimal:
             
             # Converter para Decimal e validar
             amount = Decimal(amount_input)
+            
+            # Validar contra o saldo disponível apenas se não for simulação
+            if not SIMULATION_MODE and brl_balance is not None and amount > brl_balance:
+                print(f"❌ Saldo insuficiente! Você tem R$ {brl_balance:,.2f} disponível.")
+                continue
             
             # Validar valor mínimo (10 BRL para USDTBRL)
             if amount < Decimal('10.0'):
