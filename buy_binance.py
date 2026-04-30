@@ -508,12 +508,6 @@ def buy_usdt_at_price(brl_amount: Decimal, target_price: Decimal) -> Decimal:
         log.info(f"      Taxa estimada: {usdt_quantity_rounded * Decimal('0.001')} USDT")
         log.info(f"      Líquido: {usdt_quantity_rounded - (usdt_quantity_rounded * Decimal('0.001'))} USDT")
         
-        # Simular withdrawal também
-        log.info(f"\n    🧪 Simulando withdrawal para Polygon...")
-        log.info(f"      Endereço: {RECIPIENT_ADDR}")
-        log.info(f"      Network: MATIC (Polygon)")
-        log.info(f"      ✅ Withdrawal simulado com sucesso!")
-        
         return usdt_quantity_rounded - (usdt_quantity_rounded * Decimal('0.001'))
     
     # MODO REAL
@@ -673,6 +667,77 @@ def poll_withdrawal_status(withdraw_id: str, max_wait: int = 300) -> dict:
 
 
 # ─── Main ──────────────────────────────────────────────────────────────────────
+
+def format_usdt_balance(amount: Decimal) -> str:
+    """
+    Formata o valor de USDT para exibição, evitando notação científica.
+    
+    Args:
+        amount: Valor em USDT
+        
+    Returns:
+        str: Valor formatado com até 8 casas decimais
+    """
+    if amount == 0:
+        return "0.00000000"
+    
+    # Usar a representação em string do Decimal para manter precisão total
+    # Depois formatar para exibição sem perder casas decimais importantes
+    amount_str = str(amount)
+    
+    # Se já tiver ponto decimal, garantir pelo menos 8 casas decimais
+    if '.' in amount_str:
+        # Contar casas decimais
+        decimal_places = len(amount_str.split('.')[1])
+        if decimal_places < 8:
+            # Completar com zeros até 8 casas
+            return f"{amount:.8f}".rstrip('0').rstrip('.')
+        elif decimal_places > 8:
+            # Manter apenas as primeiras 8 casas sem arredondar
+            integer_part, decimal_part = amount_str.split('.')
+            return f"{integer_part}.{decimal_part[:8]}"
+        else:
+            return amount_str
+    else:
+        # Se não tiver ponto decimal, adicionar 8 casas
+        return f"{amount:.8f}".rstrip('0').rstrip('.')
+
+
+def get_usdt_balance() -> Decimal:
+    """
+    Busca o saldo atual de USDT na conta Binance.
+    
+    Returns:
+        Decimal: Saldo disponível de USDT
+    """
+    try:
+        account_data = _get("/api/v3/account", signed=True)
+        balances = account_data.get('balances', [])
+        
+        # Debug: mostrar todos os saldos para verificação
+        log.info("🔍 Verificando todos os saldos da conta:")
+        for balance in balances:
+            if float(balance['free']) > 0 or float(balance['locked']) > 0:
+                log.info(f"   {balance['asset']}: free={balance['free']}, locked={balance['locked']}")
+        
+        # Encontrar saldo de USDT
+        usdt_balance = Decimal('0')
+        for balance in balances:
+            if balance['asset'] == 'USDT':
+                # Debug: mostrar o valor bruto da API
+                raw_balance = balance['free']
+                log.info(f"🔍 Valor bruto USDT da API: '{raw_balance}' (tipo: {type(raw_balance)})")
+                
+                # Converter string para Decimal sem normalização para manter precisão
+                usdt_balance = Decimal(str(raw_balance))
+                log.info(f"🔍 Valor convertido para Decimal: {usdt_balance}")
+                break
+        
+        return usdt_balance
+    except Exception as e:
+        log.error(f"❌ Erro ao buscar saldo USDT: {str(e)}")
+        return Decimal('0')
+
 
 def get_user_brl_amount() -> Decimal:
     """
@@ -894,16 +959,53 @@ def main():
         elif choice == '3':
             # Apenas transferência
             try:
-                amount = Decimal(input("Quantidade de USDT para transferir: "))
-                transfer_usdt_operation(amount)
+                # Consultar saldo de USDT disponível
+                log.info("\n🔍 Consultando saldo de USDT disponível...")
+                usdt_balance = get_usdt_balance()
+                
+                if usdt_balance > 0:
+                    formatted_balance = format_usdt_balance(usdt_balance)
+                    print(f"\n💰 Saldo disponível: {formatted_balance} USDT")
+                    
+                    # Perguntar quanto transferir
+                    amount_input = input(f"Quantidade de USDT para transferir (máximo {formatted_balance}): ").strip()
+                    
+                    if not amount_input:
+                        log.error("❌ Valor não informado.")
+                        continue
+                    
+                    amount = Decimal(amount_input)
+                    
+                    # Validar se tem saldo suficiente
+                    if amount > usdt_balance:
+                        log.error(f"❌ Saldo insuficiente. Disponível: {formatted_balance} USDT")
+                        continue
+                    
+                    # Validar valor mínimo (geralmente 1 USDT para withdrawal)
+                    if amount < Decimal('1.0'):
+                        log.error("❌ Valor mínimo para transferência é 1.0 USDT")
+                        continue
+                    
+                    transfer_usdt_operation(amount)
+                else:
+                    log.error("❌ Você não possui USDT disponível para transferir.")
+                    log.info("💡 Use a opção 2 para comprar USDT primeiro.")
+                    
             except ValueError:
-                log.error("❌ Valor inválido.")
+                log.error("❌ Valor inválido. Digite um número (ex: 10.5)")
+            except KeyboardInterrupt:
+                log.info("\n❌ Operação cancelada.")
             break
             
         elif choice == '4':
             # Pipeline completo
             net_usdt, target_price, real_spent = buy_usdt_operation()
             if net_usdt:
+                # Aguardar 5 segundos para garantir que a compra foi processada
+                log.info("\n⏰ Aguardando 5 segundos para processamento da compra...")
+                time.sleep(5)
+                log.info("✅ Tempo de espera concluído, iniciando transferência...")
+                
                 transfer_usdt_operation(net_usdt)
             break
             
