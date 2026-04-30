@@ -407,13 +407,13 @@ def query_matcha(usdt_amount: float, usdt_raw: int, token: TokenConfig) -> Optio
         log.warning(f"Matcha {token.symbol} skipped: no ZEROX_API_KEY configured")
         return None
     
-    url = "https://api.0x.org/swap/allowance-holder/price"
+    url = "https://api.0x.org/swap/permit2/price"
     params = {
         "chainId": str(POLYGON_CHAIN),  # Polygon chain ID
         "sellToken": USDT_ADDR,         # USDT address on Polygon
         "buyToken": token.address,      # Target token address
         "sellAmount": str(usdt_raw),    # Amount in USDT base units (wei)
-        "taker": "0x1234567890123456789012345678901234567890",  # Dummy taker address for quotes
+        "taker": "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045",  # Dummy taker address for quotes
     }
     headers = {
         "0x-api-key": ZEROX_API_KEY,
